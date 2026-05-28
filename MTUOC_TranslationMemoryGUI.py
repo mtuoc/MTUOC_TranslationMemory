@@ -13,7 +13,12 @@ class MTUOC_GUI:
         self.root = root
         self.root.title("MTUOC Translation Memory Management")
         self.root.geometry("2000x1300")
-        self.root.minsize(2000, 1300)
+        self.root.minsize(1000, 650)
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        
+        # Forcem l'aplicació a ocupar tota la pantalla (0,0 indica la cantonada superior esquerra)
+        self.root.geometry(f"{screen_width}x{screen_height}+0+0")
         
         # Estil general de la interfície
         self.style = ttk.Style()
