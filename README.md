@@ -132,39 +132,42 @@ Matching segments will immediately populate the "Found Candidates" list box on t
 <img width="1000" height="700" alt="image" src="https://github.com/user-attachments/assets/6915a407-6a75-4daa-b96d-88c0b9072b7b" />
 
 
-"Create SubMemory" Tab:
+**"Create SubMemory" Tab:**
 
-    In the "Input File" row, click "Select" to upload an XLIFF, XLF, or a flat TXT file containing your project source sentences.
+<img width="1000" height="700" alt="image" src="https://github.com/user-attachments/assets/c42c7191-870c-4f5c-8a95-4d1d0fd2830e" />
 
-    In the "Output TMX Save Path" row, click "Select" to define where the new TMX file should be saved.
 
-    Set the similarity threshold and the language attributes (SL/TL) for the TMX file metadata.
+This options allows for the creation of smaller TMXs for a given project. 
 
-    Click "Generate TMX SubMemory". The process runs in the background, filtering out duplicate matches automatically.
+* In the "Input File" row, click "Select" to upload an XLIFF, XLF, or a flat TXT file containing your project source sentences.
+* In the "Output TMX Save Path" row, click "Select" to define where the new TMX file should be saved.
+* Set the similarity threshold and the language attributes (SL/TL) for the TMX file metadata.
+* Click "Generate TMX SubMemory". The process runs in the background, filtering out duplicate matches automatically.
 
-"Index Moses" Tab:
+**"Index Moses" Tab:**
 
-    Click "Browse" to choose the file containing the source language sentences.
+<img width="1000" height="700" alt="image" src="https://github.com/user-attachments/assets/ab0eaf3d-4ae2-45fd-8a99-df11ab298b4b" />
 
-    Click "Browse" to choose the file containing the matching target language sentences.
+* Click "Browse" to choose the file containing the source language sentences.
+* Click "Browse" to choose the file containing the matching target language sentences.
+* Click "Start Moses Indexation".
 
-    Click "Start Moses Indexation".
+**"Index TMX" Tab:**
 
-"Index TMX" Tab:
+<img width="1000" height="700" alt="image" src="https://github.com/user-attachments/assets/56221e0b-8537-4c01-a325-d47f369c6e7c" />
 
-    Click "Browse" to choose your input .tmx file.
 
-    In the language fields, specify the exact language codes to extract, separated by spaces (e.g., "en en-US" for source, "ca ca-ES" for target).
+* Click "Browse" to choose your input .tmx file.
+* In the language fields, specify the exact language codes to extract, separated by spaces (e.g., "en en-US" for source, "ca ca-ES" for target).
+* Click "Start TMX Indexation".
 
-    Click "Start TMX Indexation".
+**"Index TabTxt" Tab:**
+<img width="1000" height="700" alt="image" src="https://github.com/user-attachments/assets/090b725d-4ec2-4c79-9856-11e717a69be1" />
 
-"Index TabTxt" Tab:
+* Click "Browse" to select a .txt, .tsv, or compressed .txt.gz tabulated file.
+* Check the "Reverse Columns" box if your file places the target language in the first column and the source language in the second column.
+* Click "Start TabTxt Indexation".
 
-    Click "Browse" to select a .txt, .tsv, or compressed .txt.gz tabulated file.
+### Step 3: Monitoring Progress and Logs
 
-    Check the "Reverse Columns" box if your file places the target language in the first column and the source language in the second column.
-
-    Click "Start TabTxt Indexation".
-
-Step 3: Monitoring Progress and Logs
 The black console widget located at the bottom of the window ("System Logs & Progress") captures the standard Python output stream. When performing long background indexing tasks on heavy files, it will print real-time counters (e.g., "> Indexed segments: 140,000") and database compression steps (VACUUM/ANALYZE) so you can track operations exactly as they happen.
