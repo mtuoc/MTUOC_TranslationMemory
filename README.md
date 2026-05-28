@@ -96,36 +96,41 @@ Arguments:
 * `--sl`: Source language code metadata written to the TMX header (e.g., en).
 * `--tl`: Target language code metadata written to the TMX header (e.g., ca).
 
-    GRAPHICAL USER INTERFACE (GUI) USAGE
+## GRAPHICAL USER INTERFACE (GUI) USAGE
 
 The GUI provides an intuitive, tabbed interface to interact with the database without writing console commands. It includes asynchronous processing so huge file indexations do not freeze the window.
 
-Launching the GUI:
+### Launching the GUI:
 Ensure both MTUOC_TranslationMemory.py and MTUOC_GUI.py are in the same folder. Run the following command:
-python3 MTUOC_GUI.py
 
-Step 1: Establishing a Global Database Connection
+`python3 MTUOC_TranslationMemoryGUI.py`
+
+You can also use the binary file for Windows MTUOC_TranslationMemoryGUI.exe and double-clicking from the file browser.
+
+**Step 1: Establishing a Global Database Connection**
+
 Before running any action, you must connect to a database using the top permanent bar:
 
-    Click the "Browse..." button next to the "Database Path" entry.
+* Click the "Browse..." button next to the "Database Path" entry.
+* Select an existing .db file to open it, or type a new name (e.g., new_vault.db) in the file selector window to create a fresh database.
+* Click the "Connect" button.
 
-    Select an existing .db file to open it, or type a new name (e.g., new_vault.db) in the file selector window to create a fresh database.
+The status label will change from "Disconnected" (Red) to "Connected" (Green) and will display the total number of segments currently stored in the memory.
 
-    Click the "Connect" button.
+<img width="1000" height="700" alt="image" src="https://github.com/user-attachments/assets/dffe0f1d-f82f-4aa7-bbf6-ccac07772336" />
 
-    The status label will change from "Disconnected" (Red) to "Connected" (Green) and will display the total number of segments currently stored in the memory.
+**Step 2: Navigating the Action Tabs**
 
-Step 2: Navigating the Action Tabs
+In the "Search" Tab:
 
-"Search" Tab:
+* Type or paste your source text into the "Search Query" box.
+* Adjust the "Min Similarity %" and "Max Candidates" numeric sliders.
+* Click "Perform Search".
 
-    Type or paste your source text into the "Search Query" box.
+Matching segments will immediately populate the "Found Candidates" list box on the right side, showing their match percentage score next to the target text.
 
-    Adjust the "Min Similarity %" and "Max Candidates" numeric sliders.
+<img width="1000" height="700" alt="image" src="https://github.com/user-attachments/assets/6915a407-6a75-4daa-b96d-88c0b9072b7b" />
 
-    Click "Perform Search".
-
-    Matching segments will immediately populate the "Found Candidates" list box on the right side, showing their match percentage score next to the target text.
 
 "Create SubMemory" Tab:
 
