@@ -11,12 +11,15 @@ class MTUOC_TranslationMemory:
     def __init__(self, db_path):
         """Initializes the translation memory (2.5M+ segments)."""
         self.db_path = db_path
-        self.conn = sqlite3.connect(db_path)
+        # Forcem la desactivació de la verificació de fil de manera explícita
+        self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.cursor = self.conn.cursor()
-        self.vocab_cache = {}      # Cache for n-gram IDs
-        self.blacklist_cache = set() # Cache for forbidden IDs (RAM)
-        self._setup_db()
+        self.vocab_cache = {}      
+        self.blacklist_cache = set() 
+        
+        # ORDRE CORREGIT: Primer es crea l'estructura sencera i després es llegeix
         self._create_schema()
+        self._setup_db()
         self._load_blacklist()
 
     def _setup_db(self):
@@ -29,45 +32,59 @@ class MTUOC_TranslationMemory:
         self.cursor.execute("PRAGMA foreign_keys = ON")
 
     def _create_schema(self):
-        """Creates the optimized inverted index structure and exact search index."""
-        self.cursor.executescript('''
-            CREATE TABLE IF NOT EXISTS segments (
-                id INTEGER PRIMARY KEY,
-                source_text TEXT,
-                target_text TEXT,
-                source_len INTEGER
-            );
-
-            CREATE TABLE IF NOT EXISTS vocab (
-                id INTEGER PRIMARY KEY,
-                ngram TEXT UNIQUE
-            );
-
-            CREATE TABLE IF NOT EXISTS ngrams (
-                vocab_id INTEGER,
-                segment_id INTEGER,
-                PRIMARY KEY (vocab_id, segment_id),
-                FOREIGN KEY (vocab_id) REFERENCES vocab(id),
-                FOREIGN KEY (segment_id) REFERENCES segments(id)
-            ) WITHOUT ROWID;
-
-            CREATE TABLE IF NOT EXISTS ngrams_blacklist (
-                vocab_id INTEGER PRIMARY KEY,
-                occurrence_count INTEGER,
-                FOREIGN KEY (vocab_id) REFERENCES vocab(id)
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_segments_len ON segments(source_len);
+        """Creates the database schema securely including all auxiliary tables."""
+        local_cursor = self.conn.cursor()
+        try:
+            # 1. Taula de segments (Amb restricció UNIQUE per blocar repetits)
+            local_cursor.execute("""
+                CREATE TABLE IF NOT EXISTS segments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_text TEXT UNIQUE, 
+                    target_text TEXT,
+                    source_len INTEGER
+                )
+            """)
             
-            -- Case-insensitive index for instant exact matches
-            CREATE INDEX IF NOT EXISTS idx_segments_source ON segments(source_text COLLATE NOCASE);
-        ''')
-        self.conn.commit()
+            # 2. Taula de vocabulari d'n-grames
+            local_cursor.execute("""
+                CREATE TABLE IF NOT EXISTS vocab (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ngram TEXT UNIQUE
+                )
+            """)
+
+            # 3. TAULA QUE FALTAVA: Llista negra d'n-grames freqüents
+            local_cursor.execute("""
+                CREATE TABLE IF NOT EXISTS ngrams_blacklist (
+                    vocab_id INTEGER PRIMARY KEY,
+                    occurrence_count INTEGER,
+                    FOREIGN KEY(vocab_id) REFERENCES vocab(id)
+                )
+            """)
+
+            # 4. Taula d'índex intermediari ngrams
+            local_cursor.execute("""
+                CREATE TABLE IF NOT EXISTS ngrams (
+                    vocab_id INTEGER,
+                    segment_id INTEGER,
+                    PRIMARY KEY (vocab_id, segment_id),
+                    FOREIGN KEY(vocab_id) REFERENCES vocab(id),
+                    FOREIGN KEY(segment_id) REFERENCES segments(id)
+                )
+            """)
+            
+            self.conn.commit()
+        finally:
+            local_cursor.close()
 
     def _load_blacklist(self):
-        """Loads forbidden IDs into RAM for instant filtering."""
-        self.cursor.execute("SELECT vocab_id FROM ngrams_blacklist")
-        self.blacklist_cache = {row[0] for row in self.cursor.fetchall()}
+        """Loads forbidden IDs into RAM using a safe temporary cursor."""
+        local_cursor = self.conn.cursor()
+        try:
+            local_cursor.execute("SELECT vocab_id FROM ngrams_blacklist")
+            self.blacklist_cache = {row[0] for row in local_cursor.fetchall()}
+        finally:
+            local_cursor.close()
 
     def _normalize(self, text):
         """Cleans tags and normalizes spaces (preserves case)."""
@@ -84,15 +101,15 @@ class MTUOC_TranslationMemory:
                 ngrams.add(text_padded[i:i+n])
         return ngrams
 
-    def _get_vocab_id(self, ngram):
-        """Returns the n-gram ID if it is not blacklisted."""
+    def _get_vocab_id(self, ngram, current_cursor):
+        """Returns the n-gram ID using the thread's active cursor."""
         if ngram in self.vocab_cache:
             vid = self.vocab_cache[ngram]
             return vid if vid not in self.blacklist_cache else None
         
-        self.cursor.execute("INSERT OR IGNORE INTO vocab (ngram) VALUES (?)", (ngram,))
-        self.cursor.execute("SELECT id FROM vocab WHERE ngram = ?", (ngram,))
-        res = self.cursor.fetchone()
+        current_cursor.execute("INSERT OR IGNORE INTO vocab (ngram) VALUES (?)", (ngram,))
+        current_cursor.execute("SELECT id FROM vocab WHERE ngram = ?", (ngram,))
+        res = current_cursor.fetchone()
         if not res: return None
         
         vid = res[0]
@@ -100,70 +117,92 @@ class MTUOC_TranslationMemory:
         return vid if vid not in self.blacklist_cache else None
 
     def _insert_batch(self, batch):
-        """Inserts a batch of segments atomically."""
+        """Inserts a batch of segments, completely ignoring exact duplicates."""
+        thread_conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        thread_conn.execute("PRAGMA journal_mode = WAL")
+        thread_conn.execute("PRAGMA synchronous = NORMAL")
+        
+        local_cursor = thread_conn.cursor()
         try:
-            self.cursor.execute("BEGIN TRANSACTION")
+            local_cursor.execute("BEGIN TRANSACTION")
             for src, tgt in batch:
                 src_clean = self._normalize(src)
                 if not src_clean: continue
 
-                self.cursor.execute(
-                    "INSERT INTO segments (source_text, target_text, source_len) VALUES (?, ?, ?)",
+                # CANVI CLAU: INSERT OR IGNORE per blocar repetits
+                local_cursor.execute(
+                    "INSERT OR IGNORE INTO segments (source_text, target_text, source_len) VALUES (?, ?, ?)",
                     (src_clean, tgt, len(src_clean))
                 )
-                sid = self.cursor.lastrowid
                 
+                sid = local_cursor.lastrowid
+                
+                # Si sid és None, 0 o el rowcount és 0, significa que el segment ja existia
+                # i s'ha ignorat. Per tant, saltem el càlcul d'n-grames!
+                if not sid or local_cursor.rowcount == 0:
+                    continue 
+
                 ngrams = self._get_ngrams(src_clean)
                 ngram_ids = []
                 for ng in ngrams:
-                    vid = self._get_vocab_id(ng)
-                    if vid: # Automatically filters blacklisted n-grams
+                    vid = self._get_vocab_id(ng, local_cursor)
+                    if vid: 
                         ngram_ids.append((vid, sid))
                 
                 if ngram_ids:
-                    self.cursor.executemany(
+                    local_cursor.executemany(
                         "INSERT OR IGNORE INTO ngrams (vocab_id, segment_id) VALUES (?, ?)", 
                         ngram_ids
                     )
-            self.conn.commit()
+            thread_conn.commit()
         except sqlite3.Error as e:
-            self.conn.rollback()
-            print(f"\n[SQL Error]: {e}")
+            try: thread_conn.rollback()
+            except sqlite3.Error: pass
+            print(f"\n[SQL Error in thread]: {e}")
+        finally:
+            local_cursor.close()
+            thread_conn.close()
 
     def prune_common_ngrams(self, threshold_percent=1.0):
-        """Prunes frequent n-grams and logs them with their frequency."""
-        self.cursor.execute("SELECT COUNT(*) FROM segments")
-        total = self.cursor.fetchone()[0]
-        if total == 0: return
-        limit = int(total * (threshold_percent / 100))
-        
-        print(f"\n> Frequency analysis (Limit: {limit} occurrences)...")
-        
-        # Save to blacklist with current occurrence count
-        self.cursor.execute("""
-            INSERT OR REPLACE INTO ngrams_blacklist (vocab_id, occurrence_count)
-            SELECT vocab_id, COUNT(segment_id) as freq
-            FROM ngrams
-            GROUP BY vocab_id
-            HAVING freq > ?
-        """, (limit,))
-        
-        # Remove them from the main table to boost speed and save space
-        self.cursor.execute("""
-            DELETE FROM ngrams 
-            WHERE vocab_id IN (SELECT vocab_id FROM ngrams_blacklist)
-        """)
-        
-        self.conn.commit()
-        self._load_blacklist() # Update RAM cache
-        print(f"> Blacklist updated ({len(self.blacklist_cache)} forbidden n-grams).")
+        """Prunes frequent n-grams using a safe thread cursor."""
+        local_cursor = self.conn.cursor()
+        try:
+            local_cursor.execute("SELECT COUNT(*) FROM segments")
+            total = local_cursor.fetchone()[0]
+            if total == 0: return
+            limit = int(total * (threshold_percent / 100))
+            
+            print(f"\n> Frequency analysis (Limit: {limit} occurrences)...")
+            
+            local_cursor.execute("""
+                INSERT OR REPLACE INTO ngrams_blacklist (vocab_id, occurrence_count)
+                SELECT vocab_id, COUNT(segment_id) as freq
+                FROM ngrams
+                GROUP BY vocab_id
+                HAVING freq > ?
+            """, (limit,))
+            
+            local_cursor.execute("""
+                DELETE FROM ngrams 
+                WHERE vocab_id IN (SELECT vocab_id FROM ngrams_blacklist)
+            """)
+            
+            self.conn.commit()
+            self._load_blacklist() 
+            print(f"> Blacklist updated ({len(self.blacklist_cache)} forbidden n-grams).")
+        finally:
+            local_cursor.close()
 
     def optimize(self):
-        """Compacts the file and regenerates search statistics."""
+        """Compacts the file and regenerates search statistics safely."""
         print("> Optimizing database (VACUUM/ANALYZE)...")
-        self.conn.execute("VACUUM")
-        self.conn.execute("ANALYZE")
-        print("> Optimization completed.")
+        local_cursor = self.conn.cursor()
+        try:
+            local_cursor.execute("VACUUM")
+            local_cursor.execute("ANALYZE")
+            print("> Optimization completed.")
+        finally:
+            local_cursor.close()
 
     def index_moses(self, source_file, target_file, batch_size=10000):
         """Indexes Moses files and applies automatic pruning at the end."""
@@ -306,69 +345,66 @@ class MTUOC_TranslationMemory:
         self.optimize()
 
     def search(self, query_text, min_similarity=70.0, max_candidates=100):
-        """Ultra-fast fuzzy search with early exit and shortcut for 100% Matches."""
+        """Ultra-fast fuzzy search with a thread-safe local cursor."""
         query_norm = self._normalize(query_text)
         if not query_norm: return []
 
-        # -----------------------------------------------------------------
-        # SHORTCUT: Exact Search (100% Match) via idx_segments_source
-        # -----------------------------------------------------------------
-        self.cursor.execute("""
-            SELECT target_text FROM segments 
-            WHERE source_text = ? COLLATE NOCASE
-            LIMIT ?
-        """, (query_norm, max_candidates))
-        
-        exact_matches = self.cursor.fetchall()
-        if exact_matches:
-            return [(row[0], 100.0) for row in exact_matches]
+        local_cursor = self.conn.cursor()
+        try:
+            # 1. Cerca exacta
+            local_cursor.execute("""
+                SELECT target_text FROM segments 
+                WHERE source_text = ? COLLATE NOCASE
+                LIMIT ?
+            """, (query_norm, max_candidates))
+            
+            exact_matches = local_cursor.fetchall()
+            if exact_matches:
+                return [(row[0], 100.0) for row in exact_matches]
 
-        # Early exit if 100% similarity requested but not found above
-        if min_similarity >= 100.0:
-            return []
+            if min_similarity >= 100.0:
+                return []
 
-        # -----------------------------------------------------------------
-        # FUZZY SEARCH (Only if min_similarity < 100)
-        # -----------------------------------------------------------------
-        query_ngrams = list(self._get_ngrams(query_norm))
-        if not query_ngrams: return []
+            # 2. Cerca Fuzzy
+            query_ngrams = list(self._get_ngrams(query_norm))
+            if not query_ngrams: return []
 
-        # 1. Get n-gram IDs that are NOT blacklisted
-        placeholders = ','.join(['?'] * len(query_ngrams))
-        self.cursor.execute(f"""
-            SELECT id FROM vocab 
-            WHERE ngram IN ({placeholders})
-              AND id NOT IN (SELECT vocab_id FROM ngrams_blacklist)
-        """, query_ngrams)
-        vocab_ids = [r[0] for r in self.cursor.fetchall()]
-        
-        if not vocab_ids: return []
+            placeholders = ','.join(['?'] * len(query_ngrams))
+            local_cursor.execute(f"""
+                SELECT id FROM vocab 
+                WHERE ngram IN ({placeholders})
+                  AND id NOT IN (SELECT vocab_id FROM ngrams_blacklist)
+            """, query_ngrams)
+            vocab_ids = [r[0] for r in local_cursor.fetchall()]
+            
+            if not vocab_ids: return []
 
-        # 2. Direct search on relation table with length margin
-        margin = int(len(query_norm) * (1 - min_similarity / 100) + 2)
-        placeholders_ids = ','.join(['?'] * len(vocab_ids))
-        
-        sql = f"""
-            SELECT s.source_text, s.target_text, COUNT(n.vocab_id) as hits
-            FROM ngrams n
-            JOIN segments s ON n.segment_id = s.id
-            WHERE n.vocab_id IN ({placeholders_ids})
-              AND s.source_len BETWEEN ? AND ?
-            GROUP BY n.segment_id
-            ORDER BY hits DESC
-            LIMIT ?
-        """
-        params = vocab_ids + [len(query_norm) - margin, len(query_norm) + margin, max_candidates]
-        self.cursor.execute(sql, params)
-        
-        results = []
-        q_lower = query_norm.lower()
-        for src_tm, tgt_tm, hits in self.cursor.fetchall():
-            score = fuzz.ratio(q_lower, src_tm.lower())
-            if score >= min_similarity:
-                results.append((tgt_tm, score))
-        
-        return sorted(results, key=lambda x: x[1], reverse=True)
+            margin = int(len(query_norm) * (1 - min_similarity / 100) + 2)
+            placeholders_ids = ','.join(['?'] * len(vocab_ids))
+            
+            sql = f"""
+                SELECT s.source_text, s.target_text, COUNT(n.vocab_id) as hits
+                FROM ngrams n
+                JOIN segments s ON n.segment_id = s.id
+                WHERE n.vocab_id IN ({placeholders_ids})
+                  AND s.source_len BETWEEN ? AND ?
+                GROUP BY n.segment_id
+                ORDER BY hits DESC
+                LIMIT ?
+            """
+            params = vocab_ids + [len(query_norm) - margin, len(query_norm) + margin, max_candidates]
+            local_cursor.execute(sql, params)
+            
+            results = []
+            q_lower = query_norm.lower()
+            for src_tm, tgt_tm, hits in local_cursor.fetchall():
+                score = fuzz.ratio(q_lower, src_tm.lower())
+                if score >= min_similarity:
+                    results.append((tgt_tm, score))
+            
+            return sorted(results, key=lambda x: x[1], reverse=True)
+        finally:
+            local_cursor.close()
 
     def get_stats(self):
         """Returns a summary of the translation memory status."""

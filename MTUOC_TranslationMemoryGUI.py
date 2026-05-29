@@ -4,20 +4,18 @@ import threading
 import sys
 import os
 
-# 1. IMPORTACIÓ DE LA TEVA CLASSE ORIGINAL
-# Això llegeix el teu codi existent sense necessitat de duplicar-lo
+# Importació del motor backend
 from MTUOC_TranslationMemory import MTUOC_TranslationMemory
 
 class MTUOC_GUI:
     def __init__(self, root):
         self.root = root
         self.root.title("MTUOC Translation Memory Management")
-        self.root.geometry("2000x1300")
         self.root.minsize(1000, 650)
+        
+        # Truc universal per maximitzar la finestra sense errors a Linux/Mac/Windows
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
-        
-        # Forcem l'aplicació a ocupar tota la pantalla (0,0 indica la cantonada superior esquerra)
         self.root.geometry(f"{screen_width}x{screen_height}+0+0")
         
         # Estil general de la interfície
@@ -29,7 +27,7 @@ class MTUOC_GUI:
 
     def _create_layout(self):
         # -----------------------------------------------------------------
-        # 1. BARRA SUPERIOR: Connexió Permanent a la BD
+        # 1. BARRA SUPERIOR: Connexió Permanent a la BD (Obertura o Creació)
         # -----------------------------------------------------------------
         db_frame = ttk.LabelFrame(self.root, text=" Global Database Connection ", padding=10)
         db_frame.pack(fill="x", padx=10, pady=5, side="top")
@@ -73,17 +71,25 @@ class MTUOC_GUI:
         self._setup_tab_tabtxt()
 
         # -----------------------------------------------------------------
-        # 3. CONSOLA INFERIOR: Per veure els prints d'MTUOC al vol
+        # 3. CONSOLA INFERIOR: Correcció d'empaquetat i expansió de text
         # -----------------------------------------------------------------
-        log_frame = ttk.LabelFrame(self.root, text=" System Logs & Progress ", padding=5, height=150)
-        log_frame.pack(fill="both", expand=False, padx=10, pady=10)
+        log_frame = ttk.LabelFrame(self.root, text=" System Logs & Progress ", padding=5, height=420)
+        log_frame.pack(fill="x", expand=False, padx=10, pady=10, side="bottom")
+        log_frame.pack_propagate(False) # Manté ferms els 420px d'alçada
         
-        self.txt_log = tk.Text(log_frame, height=6, bg="#1e1e1e", fg="#d4d4d4", font=("Consolas", 10))
+        # Definim height=22 per llegir unes 22-25 línies reals depenent de la font
+        self.txt_log = tk.Text(log_frame, height=22, bg="#1e1e1e", fg="#d4d4d4", font=("Consolas", 10), wrap="none")
         self.txt_log.pack(fill="both", expand=True, side="left")
         
-        scrollbar = ttk.Scrollbar(log_frame, command=self.txt_log.yview)
-        scrollbar.pack(side="right", fill="y")
-        self.txt_log.config(yscrollcommand=scrollbar.set)
+        # Barra de desplaçament vertical
+        scrollbar_y = ttk.Scrollbar(log_frame, command=self.txt_log.yview)
+        scrollbar_y.pack(side="right", fill="y")
+        
+        # Barra de desplaçament horitzontal
+        scrollbar_x = ttk.Scrollbar(log_frame, orient="horizontal", command=self.txt_log.xview)
+        scrollbar_x.pack(side="bottom", fill="x")
+        
+        self.txt_log.config(yscrollcommand=scrollbar_y.set, xscrollcommand=scrollbar_x.set)
         
         # Redirigir el stdout clàssic de Python a la nostra caixa de text gràfica
         sys.stdout = RedirectText(self.txt_log)
@@ -92,9 +98,16 @@ class MTUOC_GUI:
     # MÈTODES DE CONTROL GENERAL DE LA BASE DE DADES
     # -----------------------------------------------------------------
     def _browse_db(self):
-        # Canviem asksaveasfilename per askopenfilename
-        file_path = filedialog.askopenfilename(
-            filetypes=[("SQLite DB", "*.db"), ("All Files", "*.*")]
+        # SOLUCIÓ TOTAL: Permet triar fitxers existents, escriure'n de nous
+        # i ELIMINA per complet el cartell d'avís de confirmació d'esborrat.
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".db",
+            confirmoverwrite=False, # <--- AQUESTA ÉS LA LÍNIA MÀGICA
+            filetypes=[
+                ("Database Files (*.db)", "*.db"),
+                ("SQLite Files (*.sqlite)", "*.sqlite"),
+                ("All Files (*.*)", "*.*")
+            ]
         )
         if file_path:
             self.db_path_var.set(file_path)
@@ -106,7 +119,7 @@ class MTUOC_GUI:
                 messagebox.showerror("Error", "Please provide a valid database file path.")
                 return
             try:
-                # Instanciem la classe que hem importat de l'altre fitxer
+                # El motor SQLite crea el fitxer automàticament si no existeix
                 self.db_instance = MTUOC_TranslationMemory(path)
                 stats = self.db_instance.get_stats()
                 self.lbl_status.config(text=f"Connected ({stats['segments']:,} segments)", foreground="green")
@@ -133,34 +146,57 @@ class MTUOC_GUI:
     # DETALL DE PESTANYES
     # -----------------------------------------------------------------
     def _setup_tab_search(self):
-        left_f = ttk.Frame(self.tab_search)
-        left_f.pack(side="left", fill="both", expand=True, padx=5)
+        # Panell superior: Text de cerca i paràmetres (un costat de l'altre per estalviar espai vertical)
+        top_f = ttk.Frame(self.tab_search)
+        top_f.pack(side="top", fill="x", padx=5, pady=5)
         
-        ttk.Label(left_f, text="Search Query:").pack(anchor="w")
-        self.txt_query = tk.Text(left_f, height=5, width=40)
-        self.txt_query.pack(fill="x", pady=5)
+        # Caixa de text per introduir la query (ara més ampla a dalt)
+        query_frame = ttk.Frame(top_f)
+        query_frame.pack(side="left", fill="both", expand=True, padx=5)
+        ttk.Label(query_frame, text="Search Query:").pack(anchor="w")
+        self.txt_query = tk.Text(query_frame, height=4, bg="white", fg="black")
+        self.txt_query.pack(fill="both", expand=True, pady=2)
         
-        p_frame = ttk.Frame(left_f)
-        p_frame.pack(fill="x", pady=5)
+        # Paràmetres i botó de cerca (a la dreta de la query)
+        p_frame = ttk.Frame(top_f, padding=10)
+        p_frame.pack(side="right", fill="y", padx=5)
         
         ttk.Label(p_frame, text="Min Similarity %:").grid(row=0, column=0, sticky="w", pady=2)
-        self.spin_sim = ttk.Spinbox(p_frame, from_=0.0, to=100.0, increment=5, width=10)
+        self.spin_sim = ttk.Spinbox(p_frame, from_=0.0, to=100.0, increment=5, width=8)
         self.spin_sim.set(70.0)
         self.spin_sim.grid(row=0, column=1, padx=5, sticky="w")
         
         ttk.Label(p_frame, text="Max Candidates:").grid(row=1, column=0, sticky="w", pady=2)
-        self.spin_cand = ttk.Spinbox(p_frame, from_=1, to=500, width=10)
+        self.spin_cand = ttk.Spinbox(p_frame, from_=1, to=500, width=8)
         self.spin_cand.set(100)
         self.spin_cand.grid(row=1, column=1, padx=5, sticky="w")
         
-        ttk.Button(left_f, text="Perform Search", command=self._run_search).pack(fill="x", pady=10)
+        # COM HA DE QUEDAR (Corregit):
+        ttk.Button(p_frame, text="Perform Search", command=self._run_search).grid(row=2, column=0, columnspan=2, sticky="ew", pady=10)
+
+        # Panell inferior (DINS DE LA PESTANYA): Resultats en horitzontal a sota de tot
+        bottom_f = ttk.Frame(self.tab_search)
+        bottom_f.pack(side="top", fill="both", expand=True, padx=5, pady=5)
         
-        right_f = ttk.Frame(self.tab_search)
-        right_f.pack(side="right", fill="both", expand=True, padx=5)
+        ttk.Label(bottom_f, text="Found Candidates:").pack(anchor="w")
         
-        ttk.Label(right_f, text="Found Candidates:").pack(anchor="w")
-        self.lst_results = tk.Listbox(right_f, font=("Arial", 10))
+        # Afegim scrollbars a la llista de resultats perquè sigui còmoda
+        res_scroll_y = ttk.Scrollbar(bottom_f)
+        res_scroll_y.pack(side="right", fill="y")
+        
+        res_scroll_x = ttk.Scrollbar(bottom_f, orient="horizontal")
+        res_scroll_x.pack(side="bottom", fill="x")
+        
+        self.lst_results = tk.Listbox(
+            bottom_f, 
+            font=("Arial", 11), 
+            yscrollcommand=res_scroll_y.set,
+            xscrollcommand=res_scroll_x.set
+        )
         self.lst_results.pack(fill="both", expand=True)
+        
+        res_scroll_y.config(command=self.lst_results.yview)
+        res_scroll_x.config(command=self.lst_results.xview)
 
     def _run_search(self):
         if not self._is_db_ready(): return
